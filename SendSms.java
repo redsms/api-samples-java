@@ -1,3 +1,6 @@
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import java.util.List;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -13,6 +16,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 public class SendSms {
+    record Message(String uuid) {}
+    record SendResult(boolean success, List<Message> items, List<JsonElement> errors) {}
+
     public static String required(String name) {
         String value = System.getenv(name);
         if (value == null || value.isBlank()) throw new IllegalArgumentException("Задайте " + name);
@@ -21,14 +27,16 @@ public class SendSms {
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0) {
-            throw new IllegalArgumentException("Использование: java SendSms.java");
+            throw new IllegalArgumentException("Использование: java -cp gson.jar SendSms.java");
         }
         String url = "https://cp.redsms.ru/api/message";
+        String recipient = required("REDSMS_TO");
+        if (!recipient.matches("[+]?[1-9][0-9]{1,14}")) throw new IllegalArgumentException("Укажите один номер в международном формате, например +12025550123.");
         Map<String, String> fields = new TreeMap<>(Map.of(
             "from", required("REDSMS_FROM"),
             "route", "sms",
             "text", "Тестовое сообщение от redsms.ru",
-            "to", required("REDSMS_TO")
+            "to", recipient
         ));
         String values = String.join("", fields.values());
         String form = fields.entrySet().stream()
@@ -49,6 +57,20 @@ public class SendSms {
         if (response.statusCode() != 200) {
             throw new IllegalStateException("HTTP " + response.statusCode() + ": " + response.body());
         }
-        System.out.println(response.body());
+        SendResult result = new Gson().fromJson(response.body(), SendResult.class);
+        if (result == null) throw new IllegalStateException("Пустой ответ API");
+        if (result.errors() != null) result.errors().forEach(System.err::println);
+        if (result.items() == null || result.items().isEmpty()) {
+            throw new IllegalStateException("Сервер не вернул принятых сообщений");
+        }
+        for (Message item : result.items()) {
+            if (item == null || item.uuid() == null || item.uuid().isBlank()) {
+                throw new IllegalStateException("В ответе отсутствует UUID сообщения");
+            }
+            System.out.println(item.uuid());
+        }
+        if (!result.success() || (result.errors() != null && !result.errors().isEmpty())) {
+            System.exit(1);
+        }
     }
 }
